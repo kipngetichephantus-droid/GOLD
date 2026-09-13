@@ -1,4 +1,12 @@
-import requests, yfinance as yf, pandas as pd, datetime, os
+import datetime
+from datetime import timezone
+today = datetime.datetime.now(timezone.utc).weekday()
+if today in [5,6]:
+    import os, requests
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    CHAT_ID = os.getenv("CHAT_ID")
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": "🔴 Market Closed - Weekend. Opens Monday 10am EAT. No signals today."})
+    exit()import requests, yfinance as yf, pandas as pd, datetime, os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 def send(m):
