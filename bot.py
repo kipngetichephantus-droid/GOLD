@@ -1,4 +1,4 @@
-import os, requests, datetime, time
+import os, requests, datetime
 from datetime import timezone
 import yfinance as yf
 import pandas as pd
@@ -16,31 +16,37 @@ def send(msg):
 
 # ========== MARKET HOURS FILTER ==========
 now_utc = datetime.datetime.now(timezone.utc)
-weekday = now_utc.weekday()  # 0=Mon, 5=Sat, 6=Sun
+now_eat = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=3)))
+weekday = now_utc.weekday()
 hour_utc = now_utc.hour
 
-# Gold Closed: Sat + Sun until 22:00 UTC (Mon 1am EAT)
+# Gold Closed: Sat + Sun until 22:00 UTC
 if weekday == 5 or (weekday == 6 and hour_utc < 22):
-    send("🔴 *MARKET CLOSED*\nGold is closed for weekend.\nOpens Monday 1:00 AM EAT\nNo signals until open.")
+    # Send only once per 6 hours on weekend to avoid spam
+    if hour_utc % 6 == 0:
+        send("🔴 *MARKET CLOSED*\nGold closed for weekend.\nOpens Mon 1:00 AM EAT")
     exit()
 
-# ========== GET DATA ==========
+# ========== GET DATA (fixed for new yfinance) ==========
 def get_data(ticker, period="5d", interval="15m"):
     try:
         df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False, threads=False)
-        if len(df) < 50:
+        if df.empty or len(df) < 50:
             return None
+        # Fix new yfinance multi-index
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         return df
-    except:
+    except Exception as e:
+        print(f"Data error {ticker}: {e}")
         return None
 
 gold = get_data("GC=F")
 dxy = get_data("DX-Y.NYB", period="5d", interval="1h")
 if gold is None:
-    send("⚠️ Data error - will retry next 15min")
+    send("⚠️ Data error - Yahoo blocked, will retry next 15min")
     exit()
 
-# ========== ICT + INDICATORS ==========
 close = float(gold['Close'].iloc[-1])
 high = float(gold['High'].iloc[-1])
 low = float(gold['Low'].iloc[-1])
@@ -49,7 +55,6 @@ prev_low = float(gold['Low'].tail(20).min())
 recent_low = float(gold['Low'].tail(6).min())
 recent_high = float(gold['High'].tail(6).max())
 
-# RSI 14
 delta = gold['Close'].diff()
 gain = delta.where(delta > 0, 0).rolling(14).mean()
 loss = -delta.where(delta < 0, 0).rolling(14).mean()
@@ -57,7 +62,6 @@ rs = gain / loss
 rsi = 100 - (100 / (1 + rs))
 rsi_now = float(rsi.iloc[-1])
 
-# DXY trend
 dxy_trend = "neutral"
 if dxy is not None and len(dxy) > 10:
     dxy_close = float(dxy['Close'].iloc[-1])
@@ -66,11 +70,9 @@ if dxy is not None and len(dxy) > 10:
 
 # ========== 80% SETUP LOGIC ==========
 signal = None
-sl = 0
-tp = 0
+sl = tp = 0
 reason = ""
 
-# BUY CONDITIONS: Sweep low + DXY down + RSI <45 + Close near low zone
 if close < (prev_low + 3) and close > recent_low and rsi_now < 48 and dxy_trend == "down":
     sl = recent_low - 3.0
     risk = close - sl
@@ -78,8 +80,6 @@ if close < (prev_low + 3) and close > recent_low and rsi_now < 48 and dxy_trend 
         tp = close + (risk * 2.2)
         signal = "BUY"
         reason = f"Sweep Low + DXY Bearish + RSI {rsi_now:.1f}"
-
-# SELL CONDITIONS: Sweep high + DXY up + RSI >55 + Close near high zone  
 elif close > (prev_high - 3) and close < recent_high and rsi_now > 52 and dxy_trend == "up":
     sl = recent_high + 3.0
     risk = sl - close
@@ -88,7 +88,7 @@ elif close > (prev_high - 3) and close < recent_high and rsi_now > 52 and dxy_tr
         signal = "SELL"
         reason = f"Sweep High + DXY Bullish + RSI {rsi_now:.1f}"
 
-# ========== SEND SIGNAL ==========
+# ========== SEND SIGNAL - ALWAYS SEND SOMETHING ==========
 if signal:
     emoji = "🟢" if signal == "BUY" else "🔴"
     msg = f"""{emoji} *{signal} XAUUSD NOW 80%*
@@ -102,14 +102,11 @@ if signal:
 *ICT:* Liquidity Sweep + OB
 *DXY:* {dxy_trend.upper()}
 *RSI:* {rsi_now:.1f}
-*Time:* {datetime.datetime.now().strftime('%a %H:%M EAT')}
+*Time:* {now_eat.strftime('%a %H:%M EAT')}
 
 ⚠️ Demo signal - Manage risk!
 """
     send(msg)
 else:
-    # Only send "No setup" once per 4 hours to avoid spam - check hour
-    if hour_utc % 4 == 0:
-        send(f"⏳ *No 80% setup*\nGold: {close:.2f} | RSI: {rsi_now:.1f} | DXY: {dxy_trend}\nScanning every 15min...")
-    else:
-        print(f"No setup: {close:.2f} RSI {rsi_now:.1f} DXY {dxy_trend}")
+    # NOW IT WILL ALWAYS TELL YOU IT'S ALIVE
+    send(f"⏳ *Scanning... No 80% setup yet*\nGold: {close:.2f} | RSI: {rsi_now:.1f} | DXY: {dxy_trend}\nLow: {recent_low:.2f} High: {recent_high:.2f}\nNext check in 15min")
