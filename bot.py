@@ -14,26 +14,23 @@ def send(msg):
     except Exception as e:
         print(f"Send error: {e}")
 
-# ========== MARKET HOURS FILTER ==========
 now_utc = datetime.datetime.now(timezone.utc)
 now_eat = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=3)))
 weekday = now_utc.weekday()
 hour_utc = now_utc.hour
 
-# Gold Closed: Sat + Sun until 22:00 UTC
+# Market closed check
 if weekday == 5 or (weekday == 6 and hour_utc < 22):
-    # Send only once per 6 hours on weekend to avoid spam
     if hour_utc % 6 == 0:
         send("🔴 *MARKET CLOSED*\nGold closed for weekend.\nOpens Mon 1:00 AM EAT")
     exit()
 
-# ========== GET DATA (fixed for new yfinance) ==========
 def get_data(ticker, period="5d", interval="15m"):
     try:
         df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False, threads=False)
         if df.empty or len(df) < 50:
+            print(f"{ticker} empty")
             return None
-        # Fix new yfinance multi-index
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         return df
@@ -41,8 +38,14 @@ def get_data(ticker, period="5d", interval="15m"):
         print(f"Data error {ticker}: {e}")
         return None
 
-gold = get_data("GC=F")
+# FIXED: Spot Gold first, Futures fallback
+gold = get_data("XAUUSD=X")
+if gold is None:
+    print("XAUUSD=X failed, using GC=F fallback")
+    gold = get_data("GC=F")
+
 dxy = get_data("DX-Y.NYB", period="5d", interval="1h")
+
 if gold is None:
     send("⚠️ Data error - Yahoo blocked, will retry next 15min")
     exit()
@@ -68,7 +71,6 @@ if dxy is not None and len(dxy) > 10:
     dxy_prev = float(dxy['Close'].iloc[-5])
     dxy_trend = "up" if dxy_close > dxy_prev else "down"
 
-# ========== 80% SETUP LOGIC ==========
 signal = None
 sl = tp = 0
 reason = ""
@@ -88,7 +90,6 @@ elif close > (prev_high - 3) and close < recent_high and rsi_now > 52 and dxy_tr
         signal = "SELL"
         reason = f"Sweep High + DXY Bullish + RSI {rsi_now:.1f}"
 
-# ========== SEND SIGNAL - ALWAYS SEND SOMETHING ==========
 if signal:
     emoji = "🟢" if signal == "BUY" else "🔴"
     msg = f"""{emoji} *{signal} XAUUSD NOW 80%*
@@ -108,5 +109,4 @@ if signal:
 """
     send(msg)
 else:
-    # NOW IT WILL ALWAYS TELL YOU IT'S ALIVE
     send(f"⏳ *Scanning... No 80% setup yet*\nGold: {close:.2f} | RSI: {rsi_now:.1f} | DXY: {dxy_trend}\nLow: {recent_low:.2f} High: {recent_high:.2f}\nNext check in 15min")
